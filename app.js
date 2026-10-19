@@ -205,10 +205,49 @@ function amapLinkLabel(mode) {
   return '查看实时公交/地铁换乘（高德）';
 }
 
-/** 高德官方深链：坐标/名称/方式都按本段数据生成 */
+/* WGS-84 → GCJ-02：高德底图/接口用 GCJ-02（国测局坐标），OSM 用 WGS-84。
+   只在展示/请求高德时转换；距离、预算等计算仍用原始 WGS-84，避免误差。 */
+const GCJ = (function () {
+  const PI = Math.PI;
+  const A = 6378245.0;
+  const EE = 0.00669342162296594323;
+  function outside(lat, lng) {
+    return lng < 72.004 || lng > 137.8347 || lat < 0.8293 || lat > 55.8271;
+  }
+  function tLat(x, y) {
+    let ret = -100 + 2 * x + 3 * y + 0.2 * y * y + 0.1 * x * y + 0.2 * Math.sqrt(Math.abs(x));
+    ret += (20 * Math.sin(6 * x * PI) + 20 * Math.sin(2 * x * PI)) * 2 / 3;
+    ret += (20 * Math.sin(y * PI) + 40 * Math.sin(y / 3 * PI)) * 2 / 3;
+    ret += (160 * Math.sin(y / 12 * PI) + 320 * Math.sin(y * PI / 30)) * 2 / 3;
+    return ret;
+  }
+  function tLng(x, y) {
+    let ret = 300 + x + 2 * y + 0.1 * x * x + 0.1 * x * y + 0.1 * Math.sqrt(Math.abs(x));
+    ret += (20 * Math.sin(6 * x * PI) + 20 * Math.sin(2 * x * PI)) * 2 / 3;
+    ret += (20 * Math.sin(x * PI) + 40 * Math.sin(x / 3 * PI)) * 2 / 3;
+    ret += (150 * Math.sin(x / 12 * PI) + 300 * Math.sin(x / 30 * PI)) * 2 / 3;
+    return ret;
+  }
+  return function (lat, lng) {
+    if (outside(lat, lng)) return [lat, lng];
+    let dLat = tLat(lng - 105.0, lat - 35.0);
+    let dLng = tLng(lng - 105.0, lat - 35.0);
+    const radLat = lat / 180.0 * PI;
+    let magic = Math.sin(radLat);
+    magic = 1 - EE * magic * magic;
+    const sqrtMagic = Math.sqrt(magic);
+    dLat = (dLat * 180.0) / ((A * (1 - EE)) / (magic * sqrtMagic) * PI);
+    dLng = (dLng * 180.0) / (A / sqrtMagic * Math.cos(radLat) * PI);
+    return [lat + dLat, lng + dLng];
+  };
+})();
+
+/** 高德官方深链：坐标/名称/方式都按本段数据生成（坐标转 GCJ-02） */
 function amapDeepLink(row) {
-  const from = row.fromLng + ',' + row.fromLat + ',' + encodeURIComponent(row.fromName);
-  const to = row.place.lng + ',' + row.place.lat + ',' + encodeURIComponent(row.place.name);
+  const f = GCJ(row.fromLat, row.fromLng);
+  const t = GCJ(row.place.lat, row.place.lng);
+  const from = f[1].toFixed(6) + ',' + f[0].toFixed(6) + ',' + encodeURIComponent(row.fromName);
+  const to = t[1].toFixed(6) + ',' + t[0].toFixed(6) + ',' + encodeURIComponent(row.place.name);
   return 'https://uri.amap.com/navigation?from=' + from + '&to=' + to + '&mode=' + amapLinkMode(row.mode) + '&callnative=0';
 }
 
@@ -853,6 +892,7 @@ function initApp() {
   let amapSeq = 0;
   let mapObj = null;
   let mapLayer = null;
+  let mapBase = 'amap'; // 'amap' | 'osm'：决定展示坐标是否转 GCJ-02
 
   function showMapNote(msg) {
     if (!els.mapNote) return;
@@ -909,8 +949,19 @@ function initApp() {
       null,
       { position: 'topright', collapsed: true }
     ).addTo(mapObj);
+    mapObj.on('baselayerchange', (e) => {
+      mapBase = String(e.name || '').indexOf('OpenStreetMap') >= 0 ? 'osm' : 'amap';
+      if (state.plan) renderMap(state.plan); // 高德=GCJ-02，OSM=WGS-84：切底图时重画点位
+    });
     mapLayer = L.layerGroup().addTo(mapObj);
     return true;
+  }
+
+  /** 展示坐标：高德底图用 GCJ-02，OSM 用 WGS-84（原始数据始终为 WGS-84） */
+  function displayLL(lat, lng) {
+    if (mapBase === 'osm') return [lat, lng];
+    const g = GCJ(lat, lng);
+    return [g[0], g[1]];
   }
 
   function pinIcon(color, text) {
@@ -928,13 +979,13 @@ function initApp() {
     if (!ensureMap()) return;
     mapLayer.clearLayers();
     const points = [];
-    const originLL = [plan.origin.lat, plan.origin.lng];
+    const originLL = displayLL(plan.origin.lat, plan.origin.lng);
     L.marker(originLL, { icon: pinIcon('#6d4c41', '起') }).addTo(mapLayer)
       .bindPopup('<b>' + esc(plan.origin.name) + '</b><br>出发 ' + esc(plan.opts.startTime));
     points.push(originLL);
     let prev = originLL;
     plan.rows.forEach((r, i) => {
-      const ll = [r.place.lat, r.place.lng];
+      const ll = displayLL(r.place.lat, r.place.lng);
       const color = MODE_COLOR[r.mode] || '#555';
       L.polyline([prev, ll], { color: color, weight: 4, opacity: 0.85 }).addTo(mapLayer);
       L.marker(ll, { icon: pinIcon(color, String(i + 1)) }).addTo(mapLayer)
@@ -1003,8 +1054,11 @@ function initApp() {
     const timer = window.setTimeout(() => finish(null), 8000);
     window[cbName] = (data) => { window.clearTimeout(timer); finish(parseAmapTransit(data)); };
     scriptEl = document.createElement('script');
+    // 高德接口要求 GCJ-02 坐标（原始数据是 WGS-84）
+    const og = GCJ(r.fromLat, r.fromLng);
+    const dg = GCJ(r.place.lat, r.place.lng);
     scriptEl.src = 'https://restapi.amap.com/v3/direction/transit/integrated?origin=' +
-      r.fromLng + ',' + r.fromLat + '&destination=' + r.place.lng + ',' + r.place.lat +
+      og[1].toFixed(6) + ',' + og[0].toFixed(6) + '&destination=' + dg[1].toFixed(6) + ',' + dg[0].toFixed(6) +
       '&city=029&strategy=0&output=json&key=' + encodeURIComponent(ak) + '&callback=' + cbName;
     scriptEl.onerror = () => { window.clearTimeout(timer); finish(null); };
     document.body.appendChild(scriptEl);

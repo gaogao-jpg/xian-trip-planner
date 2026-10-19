@@ -82,6 +82,7 @@ xian-trip-planner/
 - **推荐理由**：每段标「推荐：地铁 / 公交 / 打车 / 步行」，并给一句实算理由（对比其他方式的时间与费用，来自 `recommendLeg()`，不是写死文案）。
 - Node 里也能测方式覆盖：`buildPlan(ids, { modeOverrides: { 'xingqing->qinyu': 'taxi' } })`。
 - 底图版权：高德地图 / OpenStreetMap contributors；瓦片仅作个人行程参考，请遵守对应服务条款。
+- 坐标口径：地点数据为 WGS-84；显示高德底图/请求高德接口时自动转 GCJ-02（国测局坐标），切到 OSM 时用 WGS-84，避免点位偏移。
 
 ## 高德公交换乘（已配置 Key，2026-10-19）
 
