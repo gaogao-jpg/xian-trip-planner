@@ -50,7 +50,7 @@ const CFG = {
 
 /* 高德 Web 服务 Key（等用户提供后填入；留空 = 只用官方深链降级，不编造线路号）。
    也可在控制台临时覆盖：localStorage.setItem('xian-trip-amap-key', '你的Key') */
-const AMAP_KEY = '';
+const AMAP_KEY = '0dffc6f2066d39f0c3d8f18ded129e82';
 const MODE_COLOR = { walk: '#2e7d32', bus: '#1565c0', metro: '#ef6c00', taxi: '#c62828' };
 const MODE_OPTIONS = ['walk', 'bus', 'metro', 'taxi'];
 
