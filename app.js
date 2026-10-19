@@ -872,16 +872,43 @@ function initApp() {
       return false;
     }
     mapObj = L.map(els.map, { zoomControl: true, attributionControl: true });
-    // OSM 瓦片：地图属于「联网增强」，离线/失败时降级提示，不声称全站离线（B6 口径）
-    const tiles = L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    // 底图：国内默认高德（中文路名/建筑轮廓，国内访问稳定）；可切换卫星看真实建筑；OSM 作为备选。
+    // 地图属于「联网增强」，离线/失败时降级提示，不声称全站离线（B6 口径）
+    const amapVec = L.tileLayer('https://webrd0{s}.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x={x}&y={y}&z={z}', {
+      subdomains: ['1', '2', '3', '4'],
       maxZoom: 19,
-      attribution: '&copy; OpenStreetMap contributors' // 版权链接见 README（沙箱网络下 map 内链会拖垮 --check-links）
+      attribution: '&copy; 高德地图'
     });
-    let tileOk = false;
-    tiles.on('tileerror', () => showMapNote('地图瓦片需联网，行程仍可用'));
-    tiles.on('load', () => { tileOk = true; if (els.mapNote) els.mapNote.classList.add('hidden'); });
-    tiles.addTo(mapObj);
-    window.setTimeout(() => { if (!tileOk) showMapNote('地图瓦片需联网，行程仍可用'); }, 4000);
+    const amapSat = L.tileLayer('https://webst0{s}.is.autonavi.com/appmaptile?style=6&x={x}&y={y}&z={z}', {
+      subdomains: ['1', '2', '3', '4'],
+      maxZoom: 19,
+      attribution: '&copy; 高德地图'
+    });
+    const osmTiles = L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 19,
+      attribution: '&copy; OpenStreetMap contributors'
+    });
+    amapVec.addTo(mapObj);
+    let tileErrors = 0;
+    [amapVec, amapSat, osmTiles].forEach((layer) => {
+      layer.on('tileerror', () => {
+        tileErrors += 1;
+        if (tileErrors >= 3) showMapNote('底图瓦片加载失败：可右上角切换「高德卫星」/检查网络，行程仍可用');
+      });
+      layer.on('load', () => {
+        if (tileErrors === 0 && els.mapNote) els.mapNote.classList.add('hidden');
+      });
+    });
+    window.setTimeout(() => {
+      if (tileErrors > 0 && els.mapNote && els.mapNote.classList.contains('hidden')) {
+        showMapNote('地图底图加载较慢：可右上角切换「高德卫星」，行程仍可用');
+      }
+    }, 4000);
+    L.control.layers(
+      { '高德地图（含建筑轮廓）': amapVec, '高德卫星（看建筑）': amapSat, 'OpenStreetMap（可能较慢）': osmTiles },
+      null,
+      { position: 'topright', collapsed: true }
+    ).addTo(mapObj);
     mapLayer = L.layerGroup().addTo(mapObj);
     return true;
   }
