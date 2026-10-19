@@ -48,6 +48,12 @@ const CFG = {
   preselected: ['xingqing', 'innovation', 'qinyu', 'tianxia']
 };
 
+/* 高德 Web 服务 Key（等用户提供后填入；留空 = 只用官方深链降级，不编造线路号）。
+   也可在控制台临时覆盖：localStorage.setItem('xian-trip-amap-key', '你的Key') */
+const AMAP_KEY = '';
+const MODE_COLOR = { walk: '#2e7d32', bus: '#1565c0', metro: '#ef6c00', taxi: '#c62828' };
+const MODE_OPTIONS = ['walk', 'bus', 'metro', 'taxi'];
+
 const MODE_LABEL = { walk: '步行', bus: '公交', metro: '地铁', taxi: '打车', start: '起点' };
 const CAT_LABEL = { sight: '景点', food: '饭店', campus: '校园地标', hub: '交通集散' };
 const WEEKDAY_NAMES = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
@@ -154,6 +160,56 @@ function travelInfo(km, mode, people) {
     fatigue = 0.2;
   }
   return { minutes, cost, fatigue };
+}
+
+/**
+ * 每段「推荐方式 + 理由」：用 travelInfo 实算对比各方式的时间/费用，不写死文案。
+ * @returns {{mode:string, reason:string, options:object}}
+ */
+function recommendLeg(km, budget, strategy, people) {
+  const p = Math.max(1, Math.round(Number(people) || 1));
+  const mode = pickMode(km, budget, strategy);
+  const options = {};
+  MODE_OPTIONS.forEach((m) => { options[m] = travelInfo(km, m, p); });
+  const rec = options[mode];
+  const budgetText = budget === 'comfort' ? '舒适档' : '经济档';
+  let reason = km.toFixed(1) + ' km · ' + budgetText + '；' + MODE_LABEL[mode] +
+    '约 ' + rec.minutes + ' 分钟、约¥' + Math.round(rec.cost / p) + '/人';
+  if (mode === 'walk') {
+    reason += '；步行 0 元，这段路直接走过去最省事';
+  } else if (mode === 'taxi') {
+    const fastest = Math.min(options.bus.minutes, options.metro.minutes);
+    const diff = rec.minutes - fastest; // 正数=打车更慢
+    reason += diff > 0
+      ? '；比公交/地铁慢约 ' + diff + ' 分钟，贵约 ¥'
+      : '；比公交/地铁快约 ' + Math.max(0, -diff) + ' 分钟，贵约 ¥';
+    reason += Math.max(0, Math.round((rec.cost - options.metro.cost) / p)) + '/人';
+  } else {
+    const save = Math.round((options.taxi.cost - rec.cost) / p);
+    reason += '；比打车省约 ¥' + Math.max(0, save) + '/人';
+    if (options.bus.minutes < rec.minutes) reason += '，比公交快约 ' + (rec.minutes - options.bus.minutes) + ' 分钟';
+  }
+  return { mode, reason, options };
+}
+
+/* ============ 高德深链（纯函数，Node 可测；B4 方式映射） ============ */
+function amapLinkMode(mode) {
+  if (mode === 'walk') return 'walk';
+  if (mode === 'taxi') return 'car';
+  return 'bus';
+}
+
+function amapLinkLabel(mode) {
+  if (mode === 'walk') return '高德步行导航';
+  if (mode === 'taxi') return '高德驾车导航';
+  return '查看实时公交/地铁换乘（高德）';
+}
+
+/** 高德官方深链：坐标/名称/方式都按本段数据生成 */
+function amapDeepLink(row) {
+  const from = row.fromLng + ',' + row.fromLat + ',' + encodeURIComponent(row.fromName);
+  const to = row.place.lng + ',' + row.place.lat + ',' + encodeURIComponent(row.place.name);
+  return 'https://uri.amap.com/navigation?from=' + from + '&to=' + to + '&mode=' + amapLinkMode(row.mode) + '&callnative=0';
 }
 
 /* ============ 4. 排序：贪心 + 2-opt（brief 5.5） ============ */
@@ -363,12 +419,38 @@ function schedule(order, origin, opts) {
     let travelMin = 0;
     let segCost = 0;
     let segFatigue = 0;
+    let recommended = null;
+    let reason = '';
+    let overridden = false;
     if (km > 0.05) {
-      mode = pickMode(km, budget, strategy);
+      // 用户手动指定方式：键支持 "fromId->toId"，也兼容只写 fromId（v1.2 新增）
+      const ov = opts.modeOverrides || {};
+      const ovKey = prev.id + '->' + place.id;
+      let chosen = ov[ovKey] || ov[prev.id] || '';
+      // B5：长距离 / 双校区段禁止步行（overrides 也要校验，违规回退推荐方式）
+      const campusPair = (prev.id === 'xingqing' && place.id === 'innovation') ||
+        (prev.id === 'innovation' && place.id === 'xingqing');
+      if (chosen === 'walk' && (km > 2 || campusPair)) {
+        const fallback = pickMode(km, budget, strategy);
+        warnings.push({
+          type: 'walk-blocked',
+          text: '该段约 ' + km.toFixed(1) + ' km，不能步行，已恢复推荐方式（' + MODE_LABEL[fallback] + '）。'
+        });
+        chosen = '';
+      }
+      if (chosen && MODE_LABEL[chosen] && chosen !== 'start' && chosen !== 'recommend') {
+        mode = chosen;
+        overridden = true;
+      } else {
+        mode = pickMode(km, budget, strategy);
+      }
       const info = travelInfo(km, mode, people);
       travelMin = info.minutes;
       segCost = info.cost;
       segFatigue = info.fatigue;
+      const rec = recommendLeg(km, budget, strategy, people);
+      recommended = rec.mode;
+      reason = rec.reason;
     }
     // 2) 营业时间：到达早于开门可以等开门；但离开超过闭馆（或到得太晚）就整站跳过
     let arrive = t + travelMin;
@@ -382,9 +464,13 @@ function schedule(order, origin, opts) {
       }
       if (arrive > closeMin || arrive + place.visitMin > closeMin) {
         skipped.push(place.id);
+        // P4：区分「营业时间不符」与「自选步行太远导致到得太晚」
+        const tooFar = mode === 'walk' && km > 2;
         warnings.push({
           type: 'closed',
-          text: '「' + place.name + '」此时段未营业（约 ' + place.open + '–' + place.close + '），已跳过：不安排入内、不计门票/里程/疲劳。'
+          text: tooFar
+            ? '「' + place.name + '」步行约 ' + km.toFixed(1) + ' km 太远、到得太晚（营业约 ' + place.open + '–' + place.close + '），时间不足，已跳过：不安排入内、不计门票/里程/疲劳。'
+            : '「' + place.name + '」此时段未营业（约 ' + place.open + '–' + place.close + '），已跳过：不安排入内、不计门票/里程/疲劳。'
         });
         return;
       }
@@ -399,7 +485,12 @@ function schedule(order, origin, opts) {
       place,
       fromId: prev.id,
       fromName: prev.name,
+      fromLat: prev.lat,
+      fromLng: prev.lng,
       mode,
+      recommended,
+      reason,
+      overridden,
       travelMin,
       waitMin,
       segCost,
@@ -659,6 +750,17 @@ function buildPlan(selectedIds, options) {
 
   // N2：切换「更省钱」时给出可感知对比（省钱或明示已是最省）
   const planWarnings = sched.warnings;
+  // P7：方式自选跨方案保留，并明确告知生效/失效段数（配合结果区「恢复推荐方式」按钮）
+  const requestedOverrides = Object.keys(opts.modeOverrides || {}).length;
+  const appliedOverrides = sched.rows.filter((r) => r.overridden).length;
+  if (requestedOverrides > 0) {
+    planWarnings.push({
+      type: 'info',
+      text: appliedOverrides === requestedOverrides
+        ? '已按你的自选方式计算 ' + appliedOverrides + ' 段；切换方案/重新生成会保留这些选择。'
+        : '自选方式 ' + appliedOverrides + ' 段生效，' + (requestedOverrides - appliedOverrides) + ' 段因顺序变化或跳过已失效（可点「恢复推荐方式」）。'
+    });
+  }
   if (opts.strategy === 'less-money') {
     const baseline = buildPlan(selectedIds, Object.assign({}, opts, { strategy: 'balanced' }));
     const saved = baseline.summary.budget.total - summary.budget.total;
@@ -735,10 +837,166 @@ function initApp() {
     btnCopy: document.getElementById('btnCopy'),
     btnExport: document.getElementById('btnExport'),
     btnRegen: document.getElementById('btnRegen'),
+    btnResetModes: document.getElementById('btnResetModes'),
+    offlineMode: document.getElementById('offlineMode'),
+    map: document.getElementById('map'),
+    mapNote: document.getElementById('mapNote'),
     toast: document.getElementById('toast')
   };
 
   const PREF_KEY = 'xian-trip-prefs';
+
+  /* ---------- 地图（本地 vendor Leaflet + OSM 瓦片）与高德换乘 ---------- */
+  const MODE_SELECT_OPTIONS = [['', '推荐'], ['walk', '步行'], ['bus', '公交'], ['metro', '地铁'], ['taxi', '打车']];
+  const amapCache = {};
+  const amapFailCache = {};
+  let amapSeq = 0;
+  let mapObj = null;
+  let mapLayer = null;
+
+  function showMapNote(msg) {
+    if (!els.mapNote) return;
+    els.mapNote.textContent = msg;
+    els.mapNote.classList.remove('hidden');
+  }
+
+  function ensureMap() {
+    if (state.offline) {
+      if (mapObj) { mapObj.remove(); mapObj = null; mapLayer = null; }
+      showMapNote('离线模式：地图与换乘已关闭');
+      return false;
+    }
+    if (mapObj) return true;
+    if (typeof L === 'undefined') {
+      showMapNote('地图组件未加载（vendor/leaflet 缺失），行程仍可用');
+      return false;
+    }
+    mapObj = L.map(els.map, { zoomControl: true, attributionControl: true });
+    // OSM 瓦片：地图属于「联网增强」，离线/失败时降级提示，不声称全站离线（B6 口径）
+    const tiles = L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 19,
+      attribution: '&copy; OpenStreetMap contributors' // 版权链接见 README（沙箱网络下 map 内链会拖垮 --check-links）
+    });
+    let tileOk = false;
+    tiles.on('tileerror', () => showMapNote('地图瓦片需联网，行程仍可用'));
+    tiles.on('load', () => { tileOk = true; if (els.mapNote) els.mapNote.classList.add('hidden'); });
+    tiles.addTo(mapObj);
+    window.setTimeout(() => { if (!tileOk) showMapNote('地图瓦片需联网，行程仍可用'); }, 4000);
+    mapLayer = L.layerGroup().addTo(mapObj);
+    return true;
+  }
+
+  function pinIcon(color, text) {
+    return L.divIcon({
+      className: 'map-pin',
+      html: '<span class="map-pin-num" style="background:' + color + '">' + text + '</span>',
+      iconSize: [26, 26],
+      iconAnchor: [13, 13],
+      popupAnchor: [0, -14]
+    });
+  }
+
+  /** 把行程画到地图：起点 + 各站编号 marker、按方式着色的折线、popup */
+  function renderMap(plan) {
+    if (!ensureMap()) return;
+    mapLayer.clearLayers();
+    const points = [];
+    const originLL = [plan.origin.lat, plan.origin.lng];
+    L.marker(originLL, { icon: pinIcon('#6d4c41', '起') }).addTo(mapLayer)
+      .bindPopup('<b>' + esc(plan.origin.name) + '</b><br>出发 ' + esc(plan.opts.startTime));
+    points.push(originLL);
+    let prev = originLL;
+    plan.rows.forEach((r, i) => {
+      const ll = [r.place.lat, r.place.lng];
+      const color = MODE_COLOR[r.mode] || '#555';
+      L.polyline([prev, ll], { color: color, weight: 4, opacity: 0.85 }).addTo(mapLayer);
+      L.marker(ll, { icon: pinIcon(color, String(i + 1)) }).addTo(mapLayer)
+        .bindPopup('<b>' + esc(r.place.name) + '</b><br>' + esc(fmtClock(r.arrive)) + '–' + esc(fmtClock(r.leave)) +
+          '<br>' + esc(MODE_LABEL[r.mode] || r.mode) + ' · 约¥' + r.segCost + ' · 停留 ' + r.place.visitMin + ' 分');
+      points.push(ll);
+      prev = ll;
+    });
+    if (points.length > 1) {
+      mapObj.fitBounds(L.latLngBounds(points), { padding: [26, 26] });
+    } else {
+      mapObj.setView(points[0], 13);
+    }
+    window.setTimeout(() => { if (mapObj) mapObj.invalidateSize(); }, 80);
+  }
+
+  function amapKey() {
+    try { return window.localStorage.getItem('xian-trip-amap-key') || AMAP_KEY; } catch (e) { return AMAP_KEY; }
+  }
+
+  // amapLinkMode / amapLinkLabel / amapDeepLink 已提到文件顶部（纯函数，Node 可测）
+
+  /** 解析高德公交换乘 JSON 的第一方案（只渲染接口真实返回的线路，不编造） */
+  function parseAmapTransit(data) {
+    try {
+      const t = data && data.route && data.route.transits && data.route.transits[0];
+      if (!t) return null;
+      const lines = [];
+      (t.segments || []).forEach((seg) => {
+        const bus = seg.bus && seg.bus.buslines && seg.bus.buslines[0];
+        if (!bus) return;
+        const name = String(bus.name || '').split('(')[0].trim();
+        if (!name) return; // 空线路名直接跳过，不拼造「XX路」
+        const dep = (bus.departure_stop && bus.departure_stop.name) || '';
+        const arr = (bus.arrival_stop && bus.arrival_stop.name) || '';
+        lines.push(name + '：' + dep + '上→' + arr + '下（' + (Number(bus.via_num) || 0) + ' 站）');
+      });
+      if (!lines.length) return null;
+      return { lines, minutes: Math.round(Number(t.duration) / 60) || 0 };
+    } catch (e) {
+      return null;
+    }
+  }
+
+  /** JSONP 懒加载某段换乘详情：成功缓存 + 失败短缓存(60s) + 8s 超时 + 清理 script 节点 */
+  function loadTransitDetail(r, onDone) {
+    const key = r.fromId + '->' + r.place.id;
+    if (amapCache[key]) { onDone(amapCache[key]); return; }
+    const failAt = amapFailCache[key];
+    if (failAt && Date.now() - failAt < 60000) { onDone(null); return; } // P8：失败短缓存，避免重复请求
+    const ak = amapKey();
+    if (!ak) { onDone(null); return; }
+    amapSeq += 1;
+    const cbName = '__dshAmapCb' + amapSeq;
+    let finished = false;
+    let scriptEl = null;
+    const finish = (val) => {
+      if (finished) return;
+      finished = true;
+      try { delete window[cbName]; } catch (e) { /* ignore */ }
+      if (scriptEl && scriptEl.parentNode) scriptEl.parentNode.removeChild(scriptEl);
+      if (val) amapCache[key] = val;
+      else amapFailCache[key] = Date.now();
+      onDone(val);
+    };
+    const timer = window.setTimeout(() => finish(null), 8000);
+    window[cbName] = (data) => { window.clearTimeout(timer); finish(parseAmapTransit(data)); };
+    scriptEl = document.createElement('script');
+    scriptEl.src = 'https://restapi.amap.com/v3/direction/transit/integrated?origin=' +
+      r.fromLng + ',' + r.fromLat + '&destination=' + r.place.lng + ',' + r.place.lat +
+      '&city=029&strategy=0&output=json&key=' + encodeURIComponent(ak) + '&callback=' + cbName;
+    scriptEl.onerror = () => { window.clearTimeout(timer); finish(null); };
+    document.body.appendChild(scriptEl);
+  }
+
+  /** 有 Key 时给每段异步补换乘详情；没有 Key / 离线模式只保留深链，不阻塞时间轴 */
+  function renderAmapDetails(plan) {
+    if (state.offline || !amapKey() || !els.timeline) return;
+    els.timeline.querySelectorAll('.amap-detail').forEach((el) => {
+      const idx = Number(el.dataset.amap);
+      const r = plan.rows[idx];
+      if (!r || r.mode === 'start') return;
+      if (r.mode !== 'bus' && r.mode !== 'metro') return; // 高德换乘详情只对公交/地铁段有意义
+      loadTransitDetail(r, (detail) => {
+        if (!detail) { el.textContent = '实时换乘获取失败，可点「高德」查看'; return; }
+        el.textContent = '换乘：' + detail.lines.join(' → ') + (detail.minutes ? '（约 ' + detail.minutes + ' 分钟）' : '');
+      });
+    });
+  }
 
   function loadPrefs() {
     try {
@@ -763,6 +1021,14 @@ function initApp() {
     }
   }
 
+  const OFFLINE_KEY = 'xian-trip-offline';
+  function loadOffline() {
+    try { return window.localStorage.getItem(OFFLINE_KEY) === '1'; } catch (e) { return false; }
+  }
+  function saveOffline() {
+    try { window.localStorage.setItem(OFFLINE_KEY, state.offline ? '1' : '0'); } catch (e) { /* ignore */ }
+  }
+
   const prefs = loadPrefs();
   const allAreas = [];
   PLACES_DATA.forEach((p) => { if (allAreas.indexOf(p.area) < 0) allAreas.push(p.area); });
@@ -776,7 +1042,9 @@ function initApp() {
     people: Math.max(1, Math.min(9, Number(prefs.people) || CFG.defaults.people)),
     strategy: prefs.strategy || CFG.defaults.strategy,
     variant: 0,
-    plan: null
+    plan: null,
+    modeOverrides: {},
+    offline: loadOffline()
   };
 
   // 恢复上次勾选（只保留仍存在的地点 id）；用户清空过（selected=[]）就尊重空选择（N3）
@@ -898,6 +1166,7 @@ function initApp() {
       stratBtns[i].classList.toggle('on', on);
       stratBtns[i].setAttribute('aria-pressed', String(on)); // N7
     }
+    if (els.offlineMode) els.offlineMode.checked = state.offline;
   }
 
   function todayISO() {
@@ -941,7 +1210,22 @@ function initApp() {
       '（价格均为约值，交通按 ' + plan.opts.people + ' 人计）</p>';
   }
 
-  function rowHtml(r) {
+  /** 每段「方式」下拉：推荐（空值）/步行/公交/地铁/打车；km>2 时段禁用步行（B5） */
+  function modeSelectHtml(r) {
+    if (r.mode === 'start') return '起点';
+    const cur = r.overridden ? r.mode : '';
+    const walkDisabled = r.km > 2;
+    const opts = MODE_SELECT_OPTIONS.map((pair) => {
+      const disabled = pair[0] === 'walk' && walkDisabled;
+      return '<option value="' + pair[0] + '"' + (pair[0] === cur ? ' selected' : '') +
+        (disabled ? ' disabled title="该段约 ' + r.km.toFixed(1) + ' km，不能步行"' : '') + '>' +
+        pair[1] + (disabled ? '（太远）' : '') + '</option>';
+    }).join('');
+    return '<select class="mode-select" data-from="' + esc(r.fromId) + '" data-to="' + esc(r.place.id) +
+      '" aria-label="本段出行方式（当前 ' + esc(MODE_LABEL[r.mode]) + '）">' + opts + '</select>';
+  }
+
+  function rowHtml(r, i) {
     const p = r.place;
     const cls = ['trow'];
     if (r.late) cls.push('late');
@@ -951,12 +1235,20 @@ function initApp() {
     const modeText = (isStart ? '起点' : MODE_LABEL[r.mode]) + (r.waitMin > 0 ? '（等开门 ' + r.waitMin + ' 分）' : '');
     const travelText = isStart ? '—' : r.travelMin + ' 分';
     const costText = isStart ? '—' : '约¥' + r.segCost;
+    const recBadge = (r.recommended && !isStart)
+      ? '<span class="rec-badge">推荐：' + MODE_LABEL[r.recommended] +
+        (r.overridden && r.mode !== r.recommended ? '（当前：' + MODE_LABEL[r.mode] + '）' : '') + '</span>' +
+        '<span class="rec-reason">' + esc(r.reason) + '</span>'
+      : '';
+    const amapHtml = isStart ? ''
+      : '<a class="amap-link" href="' + esc(amapDeepLink(r)) + '" target="_blank" rel="noopener noreferrer">' + esc(amapLinkLabel(r.mode)) + '</a>' +
+        '<span class="amap-detail" data-amap="' + i + '"></span>';
     // N7：div 版时间轴补 table 语义 + 每格 aria-label，读屏也能听懂 8 列
     return '<div class="' + cls.join(' ') + '" role="row">' +
       '<span class="tc" role="cell" data-label="时间" aria-label="时间 ' + timeText + '">' + timeText + '</span>' +
-      '<span class="tp" role="cell" data-label="地点 · 分类" aria-label="地点 ' + esc(p.name) + '，' + esc(CAT_LABEL[p.category] || p.category) + '，' + esc(p.area) + '">' + esc(p.name) + '<em>' + esc(CAT_LABEL[p.category] || p.category) + ' · ' + esc(p.area) + '</em></span>' +
+      '<span class="tp" role="cell" data-label="地点 · 分类" aria-label="地点 ' + esc(p.name) + '，' + esc(CAT_LABEL[p.category] || p.category) + '，' + esc(p.area) + '">' + esc(p.name) + '<em>' + esc(CAT_LABEL[p.category] || p.category) + ' · ' + esc(p.area) + '</em>' + recBadge + amapHtml + '</span>' +
       '<span role="cell" data-label="停留" aria-label="停留 ' + p.visitMin + ' 分钟">' + p.visitMin + ' 分</span>' +
-      '<span role="cell" data-label="出行方式" aria-label="出行方式 ' + modeText + '">' + modeText + '</span>' +
+      '<span role="cell" data-label="出行方式" aria-label="出行方式 ' + modeText + '">' + modeSelectHtml(r) + '</span>' +
       '<span role="cell" data-label="该段耗时" aria-label="该段耗时 ' + travelText + '">' + travelText + '</span>' +
       '<span role="cell" data-label="该段费用" aria-label="该段费用 ' + costText + '">' + costText + '</span>' +
       '<span role="cell" data-label="累计预算" aria-label="累计预算 约' + r.cumCost + ' 元">约¥' + r.cumCost + '</span>' +
@@ -970,9 +1262,11 @@ function initApp() {
       ? plan.warnings.map((w) =>
         '<li class="warn ' + esc(w.type) + '"><span class="warn-ico" aria-hidden="true">' + (WARN_ICON[w.type] || 'ℹ️') + '</span><span>' + esc(w.text) + '</span></li>').join('')
       : '<li class="warn ok"><span class="warn-ico" aria-hidden="true">✅</span><span>没有发现冲突，这条行程可以直接出发。</span></li>';
-    els.timeline.innerHTML = plan.rows.map(rowHtml).join('');
+    els.timeline.innerHTML = plan.rows.map((r, i) => rowHtml(r, i)).join('');
     els.resultSection.classList.remove('hidden');
     els.btnGenerate.textContent = '重新生成路线';
+    renderMap(plan);
+    renderAmapDetails(plan);
   }
 
   /* ---------- 复制文字 / 导出 PNG ---------- */
@@ -1143,7 +1437,8 @@ function initApp() {
       budget: state.budget,
       people: state.people,
       strategy: state.strategy,
-      variant: state.variant
+      variant: state.variant,
+      modeOverrides: state.modeOverrides || {}
     };
   }
 
@@ -1272,10 +1567,51 @@ function initApp() {
 
   // 生成 / 重新生成 / 复制 / 导出
   els.btnGenerate.addEventListener('click', generate);
+
+  // 每段交通方式自选：改选后立即重算该段与全表累计、汇总、地图，不刷新页面
+  els.timeline.addEventListener('change', (e) => {
+    const sel = e.target;
+    if (!sel || !sel.classList || !sel.classList.contains('mode-select')) return;
+    if (!state.selected.size) return;
+    state.modeOverrides = state.modeOverrides || {};
+    const key = sel.dataset.from + '->' + sel.dataset.to;
+    if (!sel.value) delete state.modeOverrides[key];
+    else state.modeOverrides[key] = sel.value;
+    const plan = buildPlan(Array.from(state.selected), readOptions());
+    state.plan = plan;
+    renderResult(plan);
+    setStatus('已按自选方式重新计算 · 总预算约 ¥' + plan.summary.budget.total +
+      ' · 总里程 ' + plan.summary.totalKm + ' km');
+  });
   els.btnRegen.addEventListener('click', () => {
     state.variant = (state.variant + 1) % 3;
     generate();
   });
+  // P7：一键恢复推荐方式
+  if (els.btnResetModes) {
+    els.btnResetModes.addEventListener('click', () => {
+      state.modeOverrides = {};
+      if (state.selected.size) {
+        const plan = buildPlan(Array.from(state.selected), readOptions());
+        state.plan = plan;
+        renderResult(plan);
+        setStatus('已恢复全部推荐方式 · 总预算约 ¥' + plan.summary.budget.total + '（约值）');
+      }
+    });
+  }
+  // B6：离线模式开关（关闭地图瓦片与高德请求；核心行程/预算/复制/PNG 仍可用）
+  if (els.offlineMode) {
+    els.offlineMode.addEventListener('change', () => {
+      state.offline = !!els.offlineMode.checked;
+      saveOffline();
+      if (state.plan) {
+        renderResult(state.plan);
+        setStatus(state.offline ? '离线模式：地图与换乘已关闭，行程/预算仍可用' : '联网增强已开启：地图与高德换乘可用（需网络）');
+      } else if (state.offline) {
+        showMapNote('离线模式：地图与换乘已关闭');
+      }
+    });
+  }
   els.btnCopy.addEventListener('click', () => {
     if (!state.plan) { toast('先生成行程'); return; }
     copyText(planToText(state.plan));
@@ -1312,6 +1648,7 @@ if (typeof module !== 'undefined' && module.exports) {
     roadDistance,
     pickMode,
     travelInfo,
+    recommendLeg,
     orderPlaces,
     tourDistance,
     twoOpt,
@@ -1325,6 +1662,9 @@ if (typeof module !== 'undefined' && module.exports) {
     toMin,
     toHHMM,
     fmtClock,
+    amapLinkMode,
+    amapLinkLabel,
+    amapDeepLink,
     findPlace,
     PLACES: PLACES_DATA,
     CFG,

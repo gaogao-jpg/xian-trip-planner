@@ -546,6 +546,86 @@ select:focus {
   .result-actions .btn { flex: 1 1 46%; }
 }
 
+/* ============ 地图（Leaflet + OSM）与 v1.2 新增 ============ */
+.map-wrap { margin-top: 16px; }
+.map {
+  width: 100%;
+  height: 320px;
+  border-radius: 13px;
+  border: 1px solid var(--line);
+  background: var(--cream);
+  overflow: hidden;
+  z-index: 1;
+}
+.map-note {
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--clay-dark);
+  background: rgba(179, 84, 30, .08);
+  border: 1px solid rgba(179, 84, 30, .18);
+  border-radius: 9px;
+  padding: 7px 10px;
+}
+.map-pin-num {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  color: #fffdf8;
+  font-size: 13px;
+  font-weight: 700;
+  border: 2px solid #fffdf8;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, .3);
+}
+.rec-badge {
+  display: inline-block;
+  margin-top: 4px;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--clay-dark);
+  background: rgba(217, 164, 65, .18);
+  border-radius: 999px;
+  padding: 2px 8px;
+}
+.rec-reason {
+  display: block;
+  margin-top: 3px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+.mode-select {
+  margin-top: 4px;
+  max-width: 100%;
+  font: inherit;
+  font-size: 12px;
+  padding: 4px 6px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--cream);
+  color: var(--ink);
+}
+.mode-select:focus-visible { outline: 2px solid var(--clay); outline-offset: 2px; }
+.amap-link {
+  display: inline-block;
+  margin-top: 4px;
+  font-size: 11.5px;
+  color: var(--clay-dark);
+  text-decoration: underline;
+}
+.amap-detail {
+  display: block;
+  margin-top: 3px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
+@media (max-width: 560px) {
+  .map { height: 260px; }
+}
+
 @media (prefers-reduced-motion: reduce) {
   * { transition: none !important; animation: none !important; }
   html { scroll-behavior: auto; }

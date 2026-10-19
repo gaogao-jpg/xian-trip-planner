@@ -7,6 +7,7 @@
   <meta name="description" content="勾选想去的西安景点和饭店，自动生成一天的时间轴：几点到、待多久、怎么过去、花多少钱、累不累。" />
   <meta name="theme-color" content="#b3541e" />
   <link rel="icon" href="favicon.svg" type="image/svg+xml" />
+  <link rel="stylesheet" href="vendor/leaflet/leaflet.css" />
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
@@ -60,6 +61,10 @@
               <button type="button" data-budget="comfort" aria-pressed="false">舒适</button>
             </div>
           </div>
+          <div class="field">
+            <span class="field-label">联网增强</span>
+            <label class="chip-radio"><input type="checkbox" id="offlineMode" /> 离线模式（关闭地图/换乘请求）</label>
+          </div>
         </div>
       </section>
 
@@ -100,6 +105,12 @@
 
         <div id="resultSection" class="result hidden">
           <div class="summary" id="summary"></div>
+
+          <div class="map-wrap">
+            <div id="map" class="map" role="region" aria-label="行程地图（需联网加载 OSM 瓦片）"></div>
+            <p class="map-note hidden" id="mapNote">地图瓦片需联网，行程仍可用</p>
+          </div>
+
           <ul class="warn-list" id="warnList"></ul>
 
           <div class="timeline-wrap" role="table" aria-label="行程时间轴（8 列）">
@@ -120,6 +131,7 @@
             <button type="button" id="btnCopy" class="btn ghost">复制文字行程</button>
             <button type="button" id="btnExport" class="btn ghost">导出 PNG 图片</button>
             <button type="button" id="btnRegen" class="btn ghost">重新生成</button>
+            <button type="button" id="btnResetModes" class="btn ghost">恢复推荐方式</button>
           </div>
         </div>
       </section>
@@ -133,6 +145,7 @@
 
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
+  <script src="vendor/leaflet/leaflet.js"></script>
   <script src="data.js"></script>
   <script src="app.js"></script>
 </body>
