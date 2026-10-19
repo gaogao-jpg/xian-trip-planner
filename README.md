@@ -4,6 +4,11 @@
 
 纯静态页面：零依赖、零构建、无 CDN、无后端，双击 `index.html` 就能用（file:// 离线可用）。数据只存在本机浏览器里。
 
+## 在线地址
+
+- 线上：<https://gaogao-jpg.github.io/xian-trip-planner/>
+- 仓库：<https://github.com/gaogao-jpg/xian-trip-planner>
+
 ## 打开方式
 
 - **方式一（推荐）**：直接双击 `index.html`，用浏览器打开。
