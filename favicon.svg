@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <!-- 西安：砖红底 + 城墙 + 落日 -->
+  <rect width="64" height="64" rx="14" fill="#b3541e"/>
+  <circle cx="32" cy="27" r="11" fill="#f3ead9" opacity="0.92"/>
+  <path d="M8 44h48v4H8z" fill="#f3ead9"/>
+  <path d="M12 44V36h5v8zm9 0V33h5v11zm9 0V36h5v8zm9 0V33h5v11zm9 0V36h5v8z" fill="#f3ead9" opacity="0.85"/>
+  <path d="M8 50h48v3H8z" fill="#8c4a1f"/>
+</svg>

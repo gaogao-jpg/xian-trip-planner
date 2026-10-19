@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>西安 · 一日行程</title>
+  <meta name="description" content="勾选想去的西安景点和饭店，自动生成一天的时间轴：几点到、待多久、怎么过去、花多少钱、累不累。" />
+  <meta name="theme-color" content="#b3541e" />
+  <link rel="icon" href="favicon.svg" type="image/svg+xml" />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <p class="eyebrow">西安 · 私人行程规划</p>
+      <h1>西安 · 一日行程</h1>
+      <p class="sub">勾选想去的地方，自动排一条顺路的行程：几点到、待多久、怎么过去、花多少钱、累不累。</p>
+    </header>
+
+    <main>
+      <!-- ============ 出发设置 ============ -->
+      <section class="panel" aria-labelledby="settingsTitle">
+        <h2 id="settingsTitle">出发设置</h2>
+
+        <div class="field">
+          <span class="field-label">起点</span>
+          <div class="origin-row">
+            <label class="chip-radio"><input type="radio" name="origin" value="xingqing" checked /> 兴庆校区</label>
+            <label class="chip-radio"><input type="radio" name="origin" value="innovation" /> 创新港</label>
+            <label class="chip-radio"><input type="radio" name="origin" value="custom" /> 自定义</label>
+          </div>
+          <select id="customOrigin" class="select hidden" aria-label="自定义起点（从已有点位里选）"></select>
+        </div>
+
+        <div class="field-grid">
+          <label class="field">
+            <span class="field-label">日期</span>
+            <input id="dateInput" type="date" />
+          </label>
+          <label class="field">
+            <span class="field-label">开始时间</span>
+            <input id="startTime" type="time" value="09:00" />
+          </label>
+          <label class="field">
+            <span class="field-label">结束时间</span>
+            <input id="endTime" type="time" value="20:00" />
+          </label>
+          <div class="field">
+            <span class="field-label">人数</span>
+            <div class="stepper">
+              <button type="button" id="peopleMinus" aria-label="减少人数">−</button>
+              <output id="peopleVal">2</output>
+              <button type="button" id="peoplePlus" aria-label="增加人数">+</button>
+            </div>
+          </div>
+          <div class="field">
+            <span class="field-label">预算档位</span>
+            <div class="seg" id="budgetSeg" role="group" aria-label="预算档位">
+              <button type="button" data-budget="economy" class="on" aria-pressed="true">经济</button>
+              <button type="button" data-budget="comfort" aria-pressed="false">舒适</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ============ 选地点 ============ -->
+      <section class="panel" aria-labelledby="pickTitle">
+        <div class="panel-head">
+          <h2 id="pickTitle">选地点</h2>
+          <span class="selected-count">已选 <strong id="selectedCount">0</strong> / <span id="totalCount">0</span></span>
+        </div>
+
+        <div class="tabs" id="catTabs"></div>
+        <div class="areas" id="areaChips"></div>
+
+        <div class="actions">
+          <button type="button" id="btnSelectAll" class="btn ghost">全选当前筛选</button>
+          <button type="button" id="btnClearAll" class="btn ghost">清空全部</button>
+        </div>
+
+        <div class="place-grid" id="placeGrid"></div>
+        <noscript>
+          <p class="noscript">本站需要启用 JavaScript 才能显示地点和生成行程。</p>
+        </noscript>
+      </section>
+
+      <!-- ============ 生成结果 ============ -->
+      <section class="panel" aria-labelledby="resultTitle">
+        <div class="panel-head">
+          <h2 id="resultTitle">生成行程</h2>
+          <div class="seg strategy" id="strategyBar" role="group" aria-label="方案偏好">
+            <button type="button" data-strategy="balanced" class="on" aria-pressed="true">标准</button>
+            <button type="button" data-strategy="less-tiring" aria-pressed="false">更省力</button>
+            <button type="button" data-strategy="less-money" aria-pressed="false">更省钱</button>
+          </div>
+        </div>
+
+        <button type="button" id="btnGenerate" class="btn primary big">一键生成行程</button>
+        <p class="status" id="statusLive" role="status" aria-live="polite"></p>
+
+        <div id="resultSection" class="result hidden">
+          <div class="summary" id="summary"></div>
+          <ul class="warn-list" id="warnList"></ul>
+
+          <div class="timeline-wrap" role="table" aria-label="行程时间轴（8 列）">
+            <div class="timeline-head" role="row">
+              <span role="columnheader">时间</span>
+              <span role="columnheader">地点 · 分类</span>
+              <span role="columnheader">停留</span>
+              <span role="columnheader">出行方式</span>
+              <span role="columnheader">该段耗时</span>
+              <span role="columnheader">该段费用</span>
+              <span role="columnheader">累计预算</span>
+              <span role="columnheader">累计疲劳</span>
+            </div>
+            <div class="timeline" id="timeline" role="rowgroup"></div>
+          </div>
+
+          <div class="result-actions">
+            <button type="button" id="btnCopy" class="btn ghost">复制文字行程</button>
+            <button type="button" id="btnExport" class="btn ghost">导出 PNG 图片</button>
+            <button type="button" id="btnRegen" class="btn ghost">重新生成</button>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="footer">
+      <p>为一个人（和同行的人）排的一条西安一日路线 · 纯本地静态页面，数据不上传。</p>
+      <p class="muted">坐标与价格均为约值（2026-10 整理），营业时间/门票请以官方发布为准。</p>
+    </footer>
+  </div>
+
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+  <script src="data.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
